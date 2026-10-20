@@ -1,1 +1,95 @@
+name: Build Patheyo APK
 
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    # Secrets না থাকলে ফাঁকা থাকবে; তখন শুধু debug APK তৈরি হবে
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+    steps:
+      - name: কোড চেকআউট
+        uses: actions/checkout@v5
+
+      - name: সবচেয়ে নতুন জিপ এক্সট্র্যাক্ট
+        run: |
+          ZIP=$(find . -maxdepth 1 -iname '*.zip' | sed 's|^\./||' | sort -V | tail -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::রিপোর root-এ কোনো .zip ফাইল পাওয়া যায়নি।"
+            exit 1
+          fi
+          echo "ব্যবহৃত জিপ: $ZIP"
+          mkdir -p src
+          unzip -q "$ZIP" -d src
+          SETTINGS=$(find src -maxdepth 3 -name 'settings.gradle*' | head -n 1)
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::জিপের ভেতরে settings.gradle.kts পাওয়া যায়নি।"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS")
+          echo "প্রজেক্ট ফোল্ডার: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "ZIP_STEM=$(basename "$ZIP" .zip)" >> "$GITHUB_ENV"
+          # কম্পিউটারের SDK পথ (C:\AndroidSdk) Linux-এ কাজ করে না, তাই বাদ
+          rm -f "$PROJECT_DIR/local.properties"
+          chmod +x "$PROJECT_DIR/gradlew"
+
+      - name: JDK 21 সেটআপ
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Android SDK লাইসেন্স গ্রহণ
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Gradle ক্যাশ
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Debug APK বিল্ড
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+
+      - name: Release APK বিল্ড (সাইন করা, Secrets থাকলে)
+        if: env.KEYSTORE_BASE64 != ''
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore.properties
+          ./gradlew assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+          rm -f keystore.properties "$RUNNER_TEMP/release.jks"
+
+      - name: APK-গুলো গুছিয়ে নাম দেওয়া
+        run: |
+          mkdir -p out
+          cp "$PROJECT_DIR"/app/build/outputs/apk/debug/*.apk "out/${ZIP_STEM}-debug.apk"
+          if ls "$PROJECT_DIR"/app/build/outputs/apk/release/*.apk >/dev/null 2>&1; then
+            cp "$PROJECT_DIR"/app/build/outputs/apk/release/*.apk "out/${ZIP_STEM}-release.apk"
+          fi
+          ls -la out
+
+      - name: APK আপলোড
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_STEM }}-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30
