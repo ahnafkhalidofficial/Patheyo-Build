@@ -61,19 +61,32 @@ jobs:
       - name: Gradle ক্যাশ
         uses: gradle/actions/setup-gradle@v4
 
-      # ✅ নতুন: আপনার patheyo-key.jks বসানো — debug ও release দুটোই এই একই কী দিয়ে সাইন হবে (SHA-1 = 02:F9:60…)
-      - name: সাইনিং কী বসানো (Secrets থেকে)
+      # ✅ আপনার patheyo-key.jks বসানো — debug ও release দুটোই এই একই কী দিয়ে সাইন হবে (SHA-1 = 02:F9:60…)
+      # পেস্টের সময় ঢোকা অদৃশ্য ফাঁকা/নতুন লাইন বাদ দেয়, কী-ফাইল খোলা যায় কি না আগে যাচাই করে (ভুল হলে পরিষ্কার বার্তা)
+      - name: সাইনিং কী বসানো ও যাচাই (Secrets থেকে)
         if: env.KEYSTORE_BASE64 != ''
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          set -e
+          CLEAN() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+          KEYSTORE_PASSWORD=$(CLEAN "$KEYSTORE_PASSWORD")
+          KEY_ALIAS=$(CLEAN "$KEY_ALIAS")
+          KEY_PASSWORD=$(CLEAN "$KEY_PASSWORD")
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n\t"' | base64 -d > "$RUNNER_TEMP/release.jks" \
+            || { echo "::error::KEYSTORE_BASE64 ঠিক নেই (অসম্পূর্ণ বা ভুল কপি) — ধাপ ১ আবার করে নতুন করে বসান"; exit 1; }
+          if ! keytool -list -v -keystore "$RUNNER_TEMP/release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > "$RUNNER_TEMP/kt.txt" 2>&1; then
+            echo "::error::কী-ফাইল খোলা গেল না — KEYSTORE_PASSWORD, KEY_ALIAS (patheyo) বা KEYSTORE_BASE64 ভুল"
+            grep -i "error\|exception" "$RUNNER_TEMP/kt.txt" | head -3
+            exit 1
+          fi
+          echo "কী-ফাইল ঠিক আছে। কীর SHA-1:"; grep "SHA1:" "$RUNNER_TEMP/kt.txt" | head -1
+          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
           {
             echo "storeFile=$RUNNER_TEMP/release.jks"
-            echo "storePassword=$KEYSTORE_PASSWORD"
-            echo "keyAlias=$KEY_ALIAS"
-            echo "keyPassword=$KEY_PASSWORD"
+            echo "storePassword=$(esc "$KEYSTORE_PASSWORD")"
+            echo "keyAlias=$(esc "$KEY_ALIAS")"
+            echo "keyPassword=$(esc "$KEY_PASSWORD")"
           } > keystore.properties
-          echo "সাইনিং কী বসানো হয়েছে"
 
       - name: Debug APK বিল্ড
         working-directory: ${{ env.PROJECT_DIR }}
