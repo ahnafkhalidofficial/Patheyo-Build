@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
 
-    # Secrets না থাকলে ফাঁকা থাকবে; তখন শুধু debug APK তৈরি হবে
+    # Secrets না থাকলে ফাঁকা থাকবে; তখন শুধু সাধারণ debug কী দিয়ে debug APK তৈরি হবে (Google সাইন-ইন চলবে না)
     env:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -45,6 +45,8 @@ jobs:
           echo "ZIP_STEM=$(basename "$ZIP" .zip)" >> "$GITHUB_ENV"
           # কম্পিউটারের SDK পথ (C:\AndroidSdk) Linux-এ কাজ করে না, তাই বাদ
           rm -f "$PROJECT_DIR/local.properties"
+          # জিপে ভুলে থাকা পুরনো keystore.properties (Windows-পথ সহ) বাদ — নিচে Secrets থেকে নতুন বানানো হয়
+          rm -f "$PROJECT_DIR/keystore.properties"
           chmod +x "$PROJECT_DIR/gradlew"
 
       - name: JDK 21 সেটআপ
@@ -59,11 +61,8 @@ jobs:
       - name: Gradle ক্যাশ
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Debug APK বিল্ড
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
-
-      - name: Release APK বিল্ড (সাইন করা, Secrets থাকলে)
+      # ✅ নতুন: আপনার patheyo-key.jks বসানো — debug ও release দুটোই এই একই কী দিয়ে সাইন হবে (SHA-1 = 02:F9:60…)
+      - name: সাইনিং কী বসানো (Secrets থেকে)
         if: env.KEYSTORE_BASE64 != ''
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
@@ -74,8 +73,31 @@ jobs:
             echo "keyAlias=$KEY_ALIAS"
             echo "keyPassword=$KEY_PASSWORD"
           } > keystore.properties
-          ./gradlew assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
-          rm -f keystore.properties "$RUNNER_TEMP/release.jks"
+          echo "সাইনিং কী বসানো হয়েছে"
+
+      - name: Debug APK বিল্ড
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+
+      - name: Release APK বিল্ড (সাইন করা, Secrets থাকলে)
+        if: env.KEYSTORE_BASE64 != ''
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+
+      - name: গোপন ফাইল মুছে ফেলা
+        if: always()
+        run: |
+          rm -f "$PROJECT_DIR/keystore.properties" "$RUNNER_TEMP/release.jks"
+
+      # ✅ নতুন: APK কোন SHA-1 দিয়ে সাইন হলো — Firebase-এর 02:F9:60:21… এর সাথে মিলতে হবে
+      - name: সাইনিং SHA-1 দেখানো
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          for APK in "$PROJECT_DIR"/app/build/outputs/apk/debug/*.apk "$PROJECT_DIR"/app/build/outputs/apk/release/*.apk; do
+            [ -f "$APK" ] || continue
+            echo "== $APK"
+            "$APKSIGNER" verify --print-certs "$APK" | grep -i "SHA-1" || true
+          done
 
       - name: APK-গুলো গুছিয়ে নাম দেওয়া
         run: |
