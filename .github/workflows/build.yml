@@ -61,7 +61,7 @@ jobs:
       - name: Gradle ক্যাশ
         uses: gradle/actions/setup-gradle@v4
 
-      # ✅ আপনার patheyo-key.jks বসানো — debug ও release দুটোই এই একই কী দিয়ে সাইন হবে (SHA-1 = 02:F9:60…)
+      # ✅ আপনার patheyo-key.jks বসানো — debug APK এই কী দিয়ে সাইন হবে (SHA-1 = 02:F9:60…)
       # পেস্টের সময় ঢোকা অদৃশ্য ফাঁকা/নতুন লাইন বাদ দেয়, কী-ফাইল খোলা যায় কি না আগে যাচাই করে (ভুল হলে পরিষ্কার বার্তা)
       - name: সাইনিং কী বসানো ও যাচাই (Secrets থেকে)
         if: env.KEYSTORE_BASE64 != ''
@@ -91,24 +91,6 @@ jobs:
       - name: Debug APK বিল্ড
         working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
-
-      # ✅ তিনটা Release: নিরাপদ (বড়) + দুটো ছোট করা (R8)। যেটা ফোনে চলে ও সবচেয়ে ছোট সেটাই ব্যবহার করুন।
-      - name: Release APK বিল্ড (সাইন করা, Secrets থাকলে)
-        if: env.KEYSTORE_BASE64 != ''
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          OPTS=(--stacktrace "-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8")
-          OUT="$GITHUB_WORKSPACE/out"; mkdir -p "$OUT"
-          ./gradlew assembleRelease "${OPTS[@]}"
-          cp app/build/outputs/apk/release/*.apk "$OUT/${ZIP_STEM}-release.apk"
-          echo "== ছোট-B: R8 + অ্যাপের কোড রক্ষা, রিসোর্স-ছাঁটাই ছাড়া"
-          if ./gradlew assembleRelease -PminifyRelease=true -PkeepAppCode=true -PshrinkResRelease=false "${OPTS[@]}"; then
-            cp app/build/outputs/apk/release/*.apk "$OUT/${ZIP_STEM}-small-B.apk"
-          else echo "::warning::small-B বিল্ড হয়নি"; fi
-          echo "== ছোট-A: R8 + অ্যাপের কোড রক্ষা + রিসোর্স-ছাঁটাই (সবচেয়ে ছোট)"
-          if ./gradlew assembleRelease -PminifyRelease=true -PkeepAppCode=true "${OPTS[@]}"; then
-            cp app/build/outputs/apk/release/*.apk "$OUT/${ZIP_STEM}-small-A.apk"
-          else echo "::warning::small-A বিল্ড হয়নি"; fi
 
       - name: গোপন ফাইল মুছে ফেলা
         if: always()
