@@ -92,10 +92,23 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
 
+      # ✅ তিনটা Release: নিরাপদ (বড়) + দুটো ছোট করা (R8)। যেটা ফোনে চলে ও সবচেয়ে ছোট সেটাই ব্যবহার করুন।
       - name: Release APK বিল্ড (সাইন করা, Secrets থাকলে)
         if: env.KEYSTORE_BASE64 != ''
         working-directory: ${{ env.PROJECT_DIR }}
-        run: ./gradlew assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+        run: |
+          OPTS=(--stacktrace "-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8")
+          OUT="$GITHUB_WORKSPACE/out"; mkdir -p "$OUT"
+          ./gradlew assembleRelease "${OPTS[@]}"
+          cp app/build/outputs/apk/release/*.apk "$OUT/${ZIP_STEM}-release.apk"
+          echo "== ছোট-B: R8 + অ্যাপের কোড রক্ষা, রিসোর্স-ছাঁটাই ছাড়া"
+          if ./gradlew assembleRelease -PminifyRelease=true -PkeepAppCode=true -PshrinkResRelease=false "${OPTS[@]}"; then
+            cp app/build/outputs/apk/release/*.apk "$OUT/${ZIP_STEM}-small-B.apk"
+          else echo "::warning::small-B বিল্ড হয়নি"; fi
+          echo "== ছোট-A: R8 + অ্যাপের কোড রক্ষা + রিসোর্স-ছাঁটাই (সবচেয়ে ছোট)"
+          if ./gradlew assembleRelease -PminifyRelease=true -PkeepAppCode=true "${OPTS[@]}"; then
+            cp app/build/outputs/apk/release/*.apk "$OUT/${ZIP_STEM}-small-A.apk"
+          else echo "::warning::small-A বিল্ড হয়নি"; fi
 
       - name: গোপন ফাইল মুছে ফেলা
         if: always()
@@ -106,7 +119,7 @@ jobs:
       - name: সাইনিং SHA-1 দেখানো
         run: |
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
-          for APK in "$PROJECT_DIR"/app/build/outputs/apk/debug/*.apk "$PROJECT_DIR"/app/build/outputs/apk/release/*.apk; do
+          for APK in "$PROJECT_DIR"/app/build/outputs/apk/debug/*.apk "$GITHUB_WORKSPACE"/out/*.apk; do
             [ -f "$APK" ] || continue
             echo "== $APK"
             "$APKSIGNER" verify --print-certs "$APK" | grep -i "SHA-1" || true
@@ -116,9 +129,6 @@ jobs:
         run: |
           mkdir -p out
           cp "$PROJECT_DIR"/app/build/outputs/apk/debug/*.apk "out/${ZIP_STEM}-debug.apk"
-          if ls "$PROJECT_DIR"/app/build/outputs/apk/release/*.apk >/dev/null 2>&1; then
-            cp "$PROJECT_DIR"/app/build/outputs/apk/release/*.apk "out/${ZIP_STEM}-release.apk"
-          fi
           ls -la out
 
       - name: APK আপলোড
